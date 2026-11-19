@@ -8,6 +8,16 @@ public sealed class Booking
     // R6: exactly 4 hours is allowed.
     public static readonly TimeSpan MaxDuration = TimeSpan.FromHours(4);
 
+    // R10: rooms with capacity greater than 10 can be booked for at most 2 hours.
+    public const int LargeRoomCapacity = 10;
+    public static readonly TimeSpan LargeRoomMaxDuration = TimeSpan.FromHours(2);
+
+    // R9: at most 2 active bookings per participant per UTC day (day of StartUtc).
+    public const int MaxActiveBookingsPerDay = 2;
+
+    // R11: a booking can be cancelled only at least 60 minutes before it starts.
+    public static readonly TimeSpan MinCancelNotice = TimeSpan.FromMinutes(60);
+
     public Guid Id { get; private set; }
     public Guid RoomId { get; private set; }
     public string BookedBy { get; private set; } = string.Empty;
@@ -21,8 +31,8 @@ public sealed class Booking
     {
     }
 
-    // All the booking rules (R2-R7) live here. nowUtc comes from TimeProvider (R5).
-    // roomBookings are the bookings that already exist for this room.
+    // All the booking rules (R2-R7, R9, R10) live here. nowUtc comes from TimeProvider (R5).
+    // roomBookings: the active bookings of this room. participantBookings: the active bookings of this bookedBy.
     public static Result<Booking> Create(
         Room room,
         string? bookedBy,
@@ -30,7 +40,8 @@ public sealed class Booking
         DateTime endUtc,
         int attendees,
         DateTime nowUtc,
-        IEnumerable<Booking> roomBookings)
+        IEnumerable<Booking> roomBookings,
+        IEnumerable<Booking> participantBookings)
     {
         // R2
         if (string.IsNullOrWhiteSpace(bookedBy))
@@ -54,13 +65,19 @@ public sealed class Booking
         if (start < ToUtc(nowUtc))
             return Error.Validation("Booking.StartInPast", "A booking cannot start in the past.");
 
-        // R6
-        if (end - start > MaxDuration)
-            return Error.Validation("Booking.TooLong", "A booking can last at most 4 hours.");
+        // R6 + R10: 2 hours for rooms with capacity > 10, otherwise 4 hours (the limit itself is allowed).
+        var maxDuration = room.Capacity > LargeRoomCapacity ? LargeRoomMaxDuration : MaxDuration;
+        if (end - start > maxDuration)
+            return Error.Validation("Booking.TooLong", $"A booking in this room can last at most {maxDuration.TotalHours} hours.");
 
         // R7: only active bookings count, and touching intervals do not overlap.
         if (roomBookings.Any(b => b.OverlapsWith(start, end)))
             return Error.Conflict("Booking.Overlap", "The room is already booked in this interval.");
+
+        // R9: same bookedBy, same UTC day of StartUtc, all rooms, only active bookings.
+        var sameDay = participantBookings.Count(b => b.Status == BookingStatus.Active && b.StartUtc.Date == start.Date);
+        if (sameDay >= MaxActiveBookingsPerDay)
+            return Error.Conflict("Booking.DailyLimit", "A participant can have at most 2 active bookings per day.");
 
         return new Booking
         {
@@ -79,10 +96,14 @@ public sealed class Booking
         Status == BookingStatus.Active && StartUtc < endUtc && startUtc < EndUtc;
 
     // R8: Active -> Cancelled; cancelling again is a conflict.
-    public Result<Booking> Cancel()
+    // R11: only if it starts at least 60 minutes from now (nowUtc from TimeProvider), otherwise 409.
+    public Result<Booking> Cancel(DateTime nowUtc)
     {
         if (Status == BookingStatus.Cancelled)
             return Error.Conflict("Booking.AlreadyCancelled", "The booking is already cancelled.");
+
+        if (StartUtc - ToUtc(nowUtc) < MinCancelNotice)
+            return Error.Conflict("Booking.TooLateToCancel", "A booking can be cancelled only at least 60 minutes before it starts.");
 
         Status = BookingStatus.Cancelled;
         return this;

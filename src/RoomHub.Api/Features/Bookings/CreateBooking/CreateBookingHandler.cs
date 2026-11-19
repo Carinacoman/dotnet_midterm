@@ -19,7 +19,12 @@ public sealed class CreateBookingHandler(
         if (room is null)
             return Room.NotFound(command.RoomId);
 
-        var activeBookings = await bookings.GetActiveForRoomAsync(room.Id, ct);
+        var roomBookings = await bookings.GetActiveForRoomAsync(room.Id, ct);
+
+        // R9 needs the active bookings of this participant in all rooms.
+        var participantBookings = string.IsNullOrWhiteSpace(command.BookedBy)
+            ? new List<Booking>()
+            : await bookings.GetActiveForParticipantAsync(command.BookedBy.Trim(), ct);
 
         // The rules are in the domain; the handler only loads, calls and saves.
         var created = Booking.Create(
@@ -29,7 +34,8 @@ public sealed class CreateBookingHandler(
             command.EndUtc,
             command.Attendees,
             timeProvider.GetUtcNow().UtcDateTime,
-            activeBookings);
+            roomBookings,
+            participantBookings);
 
         if (created.IsFailure)
             return created.Error;
