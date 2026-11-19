@@ -35,7 +35,7 @@ POST /api/rooms/{roomId}/bookings
 ## 5. What you rejected from what the AI gave you
 Give a concrete example of code or an idea proposed by the AI that you corrected or rejected, and say why.
 
-_(your answer here)_
+For R9 the AI first counted all the active bookings of a participant (at most 2 in total), because it had only part of the requirement. I rejected it: the rule is at most 2 active bookings per UTC day of StartUtc, in all rooms together. Now Booking.Create counts only the active bookings with the same StartUtc.Date, and the handler loads them with GetActiveForParticipantAsync. Bookings on different days no longer affect each other.
 
 ## 6. If you had 30 more minutes
 What would you improve and what risk did you leave in the project?
